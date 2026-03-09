@@ -470,6 +470,15 @@ CJSON_PUBLIC(char*) cJSON_SetValuestring(cJSON *object, const char *valuestring)
     return copy;
 }
 
+/*
+ * printbuffer：生成过程的缓冲区封装
+ * 作用：动态管理输出内存，避免频繁 realloc，提升性能
+ * 字段说明：
+ *   buffer: 输出缓冲区指针
+ *   length: 已使用长度
+ *   size: 缓冲区总大小
+ *   fail: 生成失败标记（0=正常，非0=失败）
+ */
 typedef struct
 {
     unsigned char *buffer;
@@ -1082,6 +1091,16 @@ static cJSON_bool parse_object(cJSON * const item, parse_buffer * const input_bu
 static cJSON_bool print_object(const cJSON * const item, printbuffer * const output_buffer);
 
 /* Utility to jump whitespace and cr/lf */
+/*
+ * 函数名：buffer_skip_whitespace
+ * 作用：跳过 JSON 字符串中的空白字符（符合 RFC 8259 规范）
+ * 参数：pb - 解析缓冲区（会修改 ptr/length，指向第一个非空白字符）
+ * 返回值：无
+ * 算法逻辑：
+ *   1. 循环检查当前字符是否为空白符（空格/\t/\n/\r）
+ *   2. 移动指针并减少剩余长度，不修改原字符串
+ * 关键规则：仅跳过规范定义的空白符，其他字符视为有效内容
+ */
 static parse_buffer *buffer_skip_whitespace(parse_buffer * const buffer)
 {
     if ((buffer == NULL) || (buffer->content == NULL))
@@ -1094,6 +1113,7 @@ static parse_buffer *buffer_skip_whitespace(parse_buffer * const buffer)
         return buffer;
     }
 
+    // 关键行：按 JSON 规范跳过空白字符，避免解析无效字符
     while (can_access_at_index(buffer, 0) && (buffer_at_offset(buffer)[0] <= 32))
     {
        buffer->offset++;
@@ -1299,6 +1319,14 @@ fail:
 }
 
 /* Render a cJSON item/entity/structure to text. */
+/*
+ * 函数名：cJSON_Print
+ * 作用：格式化生成 JSON 字符串（对外暴露的常用接口）
+ * 参数：item - 待生成的 cJSON 节点
+ * 返回值：成功返回 JSON 字符串，失败返回 NULL
+ * 内存规则：返回的字符串必须调用 cJSON_free 释放
+ * 封装逻辑：调用 print 函数，指定 fmt=1（格式化输出）
+ */
 CJSON_PUBLIC(char *) cJSON_Print(const cJSON *item)
 {
     return (char*)print(item, true, &global_hooks);
