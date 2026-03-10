@@ -250,28 +250,55 @@ static cJSON *cJSON_New_Item(const internal_hooks * const hooks)
 }
 
 /* Delete a cJSON structure. */
+/*
+ * 函数名：cJSON_Delete
+ * 行号范围：260–288
+ * 对外接口：递归销毁 cJSON 节点树
+ * 参数：item - 待销毁的节点（允许 NULL）
+ * 核心逻辑：
+ *   1. 遍历兄弟节点链表（next 指针）
+ *   2. 递归销毁子节点（child 指针）
+ *   3. 释放 valuestring/string（非引用模式）
+ *   4. 释放节点本身
+ * 安全处理：
+ *   - cJSON_IsReference：引用模式不释放内存
+ *   - cJSON_StringIsConst：常量字符串不释放
+ */
 CJSON_PUBLIC(void) cJSON_Delete(cJSON *item)
 {
-    cJSON *next = NULL;
+    cJSON *next = NULL;// 保存下一个兄弟节点的指针（当前节点释放后无法访问 next）
     while (item != NULL)
     {
-        next = item->next;
+        next = item->next;// 先缓存下一个节点，防止释放当前节点后丢失链表引用
+        /* 1. 递归销毁子节点（仅非引用模式） */
+        // cJSON_IsReference 标志：节点是引用类型，不拥有子节点内存，无需释放
+        // item->child != NULL：存在子节点（数组/对象的元素/键值对）
         if (!(item->type & cJSON_IsReference) && (item->child != NULL))
         {
-            cJSON_Delete(item->child);
+            cJSON_Delete(item->child);// 递归销毁子节点树（数组/对象的所有子元素）
         }
+        /* 2. 释放 valuestring 内存（仅非引用模式） */
+        // cJSON_IsReference 标志：valuestring 是外部引用，不释放
+        // item->valuestring != NULL：存在字符串值（字符串节点/数字节点的字符串形式）
         if (!(item->type & cJSON_IsReference) && (item->valuestring != NULL))
         {
-            global_hooks.deallocate(item->valuestring);
-            item->valuestring = NULL;
+            global_hooks.deallocate(item->valuestring);// 通过全局内存钩子释放 valuestring 内存（兼容自定义 malloc/free）
+            item->valuestring = NULL;// 清空指针，避免野指针访问
         }
+        /* 3. 释放 string 内存（仅非常量模式） */
+        // cJSON_StringIsConst 标志：string（key）是常量字符串，不释放
+        // item->string != NULL：存在键名（对象的 key）/* 3. 释放 string 内存（仅非常量模式） */
+        // cJSON_StringIsConst 标志：string（key）是常量字符串，不释放
+        // item->string != NULL：存在键名（对象的 key）
         if (!(item->type & cJSON_StringIsConst) && (item->string != NULL))
         {
-            global_hooks.deallocate(item->string);
-            item->string = NULL;
+            global_hooks.deallocate(item->string);// 通过全局内存钩子释放 string（key）内存
+            item->string = NULL;// 清空指针，避免野指针访问
         }
+        /* 4. 释放当前节点本身 */
+        // 释放节点结构体内存
         global_hooks.deallocate(item);
-        item = next;
+        item = next;// 移动到下一个兄弟节点，继续销毁
     }
 }
 
@@ -286,6 +313,17 @@ static unsigned char get_decimal_point(void)
 #endif
 }
 
+/*
+ * 结构体：parse_buffer
+ * 行号范围：305–312
+ * 作用：解析缓冲区封装（避免裸指针操作）
+ * 字段说明：
+ *   content - JSON 字符串指针
+ *   length - 字符串总长度
+ *   offset - 当前解析偏移量
+ *   depth - 当前嵌套深度（防止栈溢出）
+ *   hooks - 内存钩子
+ */
 typedef struct
 {
     const unsigned char *content;
@@ -304,16 +342,34 @@ typedef struct
 #define buffer_at_offset(buffer) ((buffer)->content + (buffer)->offset)
 
 /* Parse the input text to generate a number, and populate the result into item. */
+/*
+ * 函数名：parse_number
+ * 行号范围：322–402
+ * 内部函数：解析 JSON 数字（整数/浮点数/科学计数法）
+ * 参数：
+ *   item - 输出节点（填充数值）
+ *   input_buffer - 解析缓冲区
+ * 返回值：成功返回 true，失败返回 false
+ * 核心逻辑：
+ *   1. 提取数字字符串到临时缓冲区
+ *   2. 替换 '.' 为当前 locale 小数点（兼容 strtod）
+ *   3. strtod 转换为 double，同时存储到 valueint（处理溢出）
+ *   4. 设置节点类型为 cJSON_Number
+ * 错误处理：
+ *   - 内存分配失败 → 返回 false
+ *   - 转换失败 → 返回 false
+ */
 static cJSON_bool parse_number(cJSON * const item, parse_buffer * const input_buffer)
 {
-    double number = 0;
-    unsigned char *after_end = NULL;
-    unsigned char *number_c_string;
-    unsigned char decimal_point = get_decimal_point();
-    size_t i = 0;
-    size_t number_string_length = 0;
-    cJSON_bool has_decimal_point = false;
+    double number = 0; // 存储解析后的高精度数值（double 类型，兼容浮点数/大数）
+    unsigned char *after_end = NULL;// strtod 输出参数，指向数字字符串后的第一个无效字符
+    unsigned char *number_c_string; // 临时缓冲区，存储提取的数字字符（需手动加 '\0'）
+    unsigned char decimal_point = get_decimal_point();// 获取当前系统本地化的小数点字符（如英文系统 '.'、欧洲部分系统 ','），适配 strtod 函数
+    size_t i = 0;  // 循环索引，遍历输入缓冲区的数字字符
+    size_t number_string_length = 0; // 提取的数字字符串长度（不含 '\0'）
+    cJSON_bool has_decimal_point = false;// 标记是否包含小数点（区分整数/浮点数）
 
+    // 安全检查：解析缓冲区为空或缓冲区内容为空 → 直接返回失败
     if ((input_buffer == NULL) || (input_buffer->content == NULL))
     {
         return false;
@@ -322,10 +378,17 @@ static cJSON_bool parse_number(cJSON * const item, parse_buffer * const input_bu
     /* copy the number into a temporary buffer and replace '.' with the decimal point
      * of the current locale (for strtod)
      * This also takes care of '\0' not necessarily being available for marking the end of the input */
+    /* 
+     * 第一步：提取数字字符到临时缓冲区（解决输入无 '\0' 结尾的问题）
+     * 遍历规则：仅保留数字相关合法字符，遇到非数字字符立即终止遍历
+     * 合法字符：0-9（数字）、+/-（符号）、e/E（科学计数法）、.（小数点）
+     */
     for (i = 0; can_access_at_index(input_buffer, i); i++)
     {
+         // buffer_at_offset：获取当前偏移量+i 位置的字符（宏定义，简化缓冲区访问）
         switch (buffer_at_offset(input_buffer)[i])
         {
+             // 数字字符、符号、科学计数法标识 → 合法，长度+1
             case '0':
             case '1':
             case '2':
@@ -343,6 +406,7 @@ static cJSON_bool parse_number(cJSON * const item, parse_buffer * const input_bu
                 number_string_length++;
                 break;
 
+          // 小数点 → 合法，长度+1，标记浮点数
             case '.':
                 number_string_length++;
                 has_decimal_point = true;
@@ -352,17 +416,26 @@ static cJSON_bool parse_number(cJSON * const item, parse_buffer * const input_bu
                 goto loop_end;
         }
     }
-loop_end:
+loop_end:// 循环终止标签（兼容正常遍历结束/遇到非法字符终止）
     /* malloc for temporary buffer, add 1 for '\0' */
+    /* 
+     * 第二步：分配临时缓冲区并拷贝数字字符
+     * 长度+1：为 '\0' 预留空间（strtod 要求字符串以 '\0' 结尾）
+     * 使用缓冲区的内存钩子分配：兼容自定义内存分配器（如嵌入式系统）
+     */
     number_c_string = (unsigned char *) input_buffer->hooks.allocate(number_string_length + 1);
-    if (number_c_string == NULL)
+    if (number_c_string == NULL) // 内存分配失败 → 返回解析失败
     {
         return false; /* allocation failure */
     }
 
-    memcpy(number_c_string, buffer_at_offset(input_buffer), number_string_length);
-    number_c_string[number_string_length] = '\0';
+    memcpy(number_c_string, buffer_at_offset(input_buffer), number_string_length); // 拷贝提取的数字字符到临时缓冲区
+    number_c_string[number_string_length] = '\0';// 手动添加字符串终止符
 
+    /* 
+     * 第三步：适配本地化小数点（跨平台兼容）
+     * 例如：欧洲系统中 strtod 识别 ',' 为小数点，需将 JSON 标准的 '.' 替换为 ','
+     */
     if (has_decimal_point)
     {
         for (i = 0; i < number_string_length; i++)
@@ -370,44 +443,73 @@ loop_end:
             if (number_c_string[i] == '.')
             {
                 /* replace '.' with the decimal point of the current locale (for strtod) */
+                 // 将 JSON 标准的 '.' 替换为系统本地化小数点
                 number_c_string[i] = decimal_point;
             }
         }
     }
 
-    number = strtod((const char*)number_c_string, (char**)&after_end);
+    /* 
+     * 第四步：调用 strtod 转换字符串为 double 数值
+     * strtod 特性：
+     *   - 自动处理符号、小数点、科学计数法（如 123e-4、-5.67E8）
+     *   - after_end 指向转换后的第一个无效字符（用于校验是否有有效数字）
+     */
+    number = strtod((const char*)number_c_string, (char**)&after_end); // 校验：若 after_end 等于起始地址 → 无有效数字（如空字符串、仅符号）
     if (number_c_string == after_end)
     {
         /* free the temporary buffer */
-        input_buffer->hooks.deallocate(number_c_string);
-        return false; /* parse_error */
+        input_buffer->hooks.deallocate(number_c_string);// 释放临时缓冲区（避免内存泄漏）
+        return false; /* parse_error *//* parse_error：无有效数字 */
     }
 
-    item->valuedouble = number;
+    /* 
+     * 第五步：填充 cJSON 节点
+     * 1. valuedouble：存储高精度数值（保留浮点数/大数精度）
+     * 2. valueint：存储整数形式（溢出时饱和处理，避免未定义行为）
+     */
+    item->valuedouble = number;// 写入高精度数值
 
-    /* use saturation in case of overflow */
-    if (number >= INT_MAX)
+    /* use saturation in case of overflow ：溢出时饱和策略（安全处理）*/
+    if (number >= INT_MAX)// 数值大于等于 int 最大值 → 设为 INT_MAX
     {
         item->valueint = INT_MAX;
     }
-    else if (number <= (double)INT_MIN)
+    else if (number <= (double)INT_MIN) // 数值小于等于 int 最小值 → 设为 INT_MIN
     {
         item->valueint = INT_MIN;
     }
-    else
+    else// 数值在 int 范围内 → 直接强制转换
     {
         item->valueint = (int)number;
     }
 
-    item->type = cJSON_Number;
+    item->type = cJSON_Number;// 标记节点类型为数字
 
+    /* 
+     * 第六步：更新解析偏移量（推进到数字后的第一个字符）
+     * after_end - number_c_string：实际转换的数字字符长度（可能小于提取长度，如 123abc 仅转换 123）
+     */
     input_buffer->offset += (size_t)(after_end - number_c_string);
     /* free the temporary buffer */
-    input_buffer->hooks.deallocate(number_c_string);
+    input_buffer->hooks.deallocate(number_c_string);// 释放临时缓冲区（内存回收）
     return true;
 }
 
 /* don't ask me, but the original cJSON_SetNumberValue returns an integer or double */
+/*
+ * 函数名：cJSON_SetNumberHelper
+ * 行号范围：405–419
+ * 内部函数：设置数字节点的值（处理溢出）
+ * 参数：
+ *   object - 数字节点
+ *   number - 待设置的数值
+ * 返回值：设置后的 double 值
+ * 核心逻辑：
+ *   - 数值超过 INT_MAX → valueint = INT_MAX
+ *   - 数值小于 INT_MIN → valueint = INT_MIN
+ *   - 否则 valueint = (int)number
+ */
 CJSON_PUBLIC(double) cJSON_SetNumberHelper(cJSON *object, double number)
 {
     if (number >= INT_MAX)
@@ -427,6 +529,22 @@ CJSON_PUBLIC(double) cJSON_SetNumberHelper(cJSON *object, double number)
 }
 
 /* Note: when passing a NULL valuestring, cJSON_SetValuestring treats this as an error and return NULL */
+/*
+ * 函数名：cJSON_SetValuestring
+ * 行号范围：422–460
+ * 对外接口：设置字符串节点的 valuestring
+ * 参数：
+ *   object - 字符串节点
+ *   valuestring - 新字符串
+ * 返回值：成功返回新字符串指针，失败返回 NULL
+ * 安全检查：
+ *   1. 节点类型必须是 cJSON_String 且非引用模式
+ *   2. 新旧字符串不能重叠（避免 strcpy 错误）
+ *   3. 内存不足时返回 NULL
+ * 内存规则：
+ *   - 新字符串长度 ≤ 旧长度 → 直接覆盖
+ *   - 新字符串长度 > 旧长度 → 重新分配内存
+ */
 CJSON_PUBLIC(char*) cJSON_SetValuestring(cJSON *object, const char *valuestring)
 {
     char *copy = NULL;
@@ -491,6 +609,22 @@ typedef struct
 } printbuffer;
 
 /* realloc printbuffer if necessary to have at least "needed" bytes more */
+/*
+ * 函数名：ensure
+ * 行号范围：478–538
+ * 内部函数：确保缓冲区有足够空间（动态扩容）
+ * 参数：
+ *   p - 打印缓冲区
+ *   needed - 需要的额外空间
+ * 返回值：成功返回当前写入位置指针，失败返回 NULL
+ * 扩容策略：
+ *   1. 所需空间 ≤ 当前剩余 → 直接返回
+ *   2. 所需空间 > 当前剩余 → 扩容为 needed*2（最大 INT_MAX）
+ *   3. 优先使用 realloc，无则手动分配+拷贝
+ * 错误处理：
+ *   - noalloc=true 时不扩容 → 返回 NULL
+ *   - 内存不足 → 释放原缓冲区，返回 NULL
+ */
 static unsigned char* ensure(printbuffer * const p, size_t needed)
 {
     unsigned char *newbuffer = NULL;
@@ -577,6 +711,15 @@ static unsigned char* ensure(printbuffer * const p, size_t needed)
 }
 
 /* calculate the new length of the string in a printbuffer and update the offset */
+/*
+ 行号：541
+ * 函数名：update_offset
+ * 行号范围：541–551
+ * 内部函数：更新打印缓冲区的偏移量
+ * 参数：buffer - 打印缓冲区
+ * 核心逻辑：根据当前写入内容的 strlen 更新 offset
+ * 作用：确保 offset 始终指向缓冲区末尾
+ */
 static void update_offset(printbuffer * const buffer)
 {
     const unsigned char *buffer_pointer = NULL;
@@ -597,6 +740,22 @@ static cJSON_bool compare_double(double a, double b)
 }
 
 /* Render the number nicely from the given item into a string. */
+/*
+ * 函数名：print_number
+ * 内部函数：将数字节点转换为 JSON 字符串
+ * 参数：
+ *   item - 数字节点
+ *   output_buffer - 打印缓冲区
+ * 返回值：成功返回 true，失败返回 false
+ * 核心逻辑：
+ *   1. NaN/Infinity → 输出 "null"（符合 JSON 规范）
+ *   2. 整数 → %d 直接打印
+ *   3. 浮点数 → 先 %.15g，精度不足则 %.17g
+ *   4. 替换 locale 小数点为 '.'（JSON 规范要求）
+ * 错误处理：
+ *   - sprintf 失败 → 返回 false
+ *   - 缓冲区不足 → 返回 false
+ */
 static cJSON_bool print_number(const cJSON * const item, printbuffer * const output_buffer)
 {
     unsigned char *output_pointer = NULL;
@@ -825,6 +984,23 @@ fail:
 }
 
 /* Parse the input text into an unescaped cinput, and populate item. */
+/*
+ * 函数名：parse_string
+ * 内部函数：解析 JSON 字符串（处理转义/UTF-16）
+ * 参数：
+ *   item - 输出节点
+ *   input_buffer - 解析缓冲区
+ * 返回值：成功返回 true，失败返回 false
+ * 核心逻辑：
+ *   1. 跳过开头 '"'，找到结尾 '"'
+ *   2. 处理转义字符：\b/\f/\n/\r/\t/\"/\\/\/\uXXXX
+ *   3. 转换 UTF-16 转义序列为 UTF-8
+ *   4. 分配内存存储无转义字符串，绑定到 item->valuestring
+ * 错误处理：
+ *   - 字符串未结束 → 返回 false
+ *   - 转义序列无效 → 返回 false
+ *   - 内存分配失败 → 返回 false
+ */
 static cJSON_bool parse_string(cJSON * const item, parse_buffer * const input_buffer)
 {
     const unsigned char *input_pointer = buffer_at_offset(input_buffer) + 1;
@@ -1077,6 +1253,14 @@ static cJSON_bool print_string_ptr(const unsigned char * const input, printbuffe
 }
 
 /* Invoke print_string_ptr (which is useful) on an item. */
+/*
+ * 函数名：print_string
+ * 内部函数：封装 print_string_ptr 处理字符串节点
+ * 参数：
+ *   item - 字符串节点
+ *   p - 打印缓冲区
+ * 返回值：print_string_ptr 的返回值
+ */
 static cJSON_bool print_string(const cJSON * const item, printbuffer * const p)
 {
     return print_string_ptr((unsigned char*)item->valuestring, p);
@@ -1143,6 +1327,16 @@ static parse_buffer *skip_utf8_bom(parse_buffer * const buffer)
     return buffer;
 }
 
+/*
+ * 函数名：cJSON_ParseWithOpts
+ * 对外接口：带选项的 JSON 解析入口
+ * 参数：
+ *   value - JSON 字符串
+ *   return_parse_end - 输出解析结束位置
+ *   require_null_terminated - 是否要求 '\0' 结尾
+ * 返回值：成功返回根节点，失败返回 NULL
+ * 核心逻辑：封装 cJSON_ParseWithLengthOpts，自动计算字符串长度
+ */
 CJSON_PUBLIC(cJSON *) cJSON_ParseWithOpts(const char *value, const char **return_parse_end, cJSON_bool require_null_terminated)
 {
     size_t buffer_length;
@@ -1239,6 +1433,13 @@ fail:
 }
 
 /* Default options for cJSON_Parse */
+/*
+ * 函数名：cJSON_Parse
+ * 对外接口：默认 JSON 解析入口
+ * 参数：value - JSON 字符串
+ * 返回值：成功返回根节点，失败返回 NULL
+ * 核心逻辑：封装 cJSON_ParseWithOpts，默认选项（不要求 '\0' 结尾）
+ */
 CJSON_PUBLIC(cJSON *) cJSON_Parse(const char *value)
 {
     return cJSON_ParseWithOpts(value, 0, 0);
@@ -1251,6 +1452,21 @@ CJSON_PUBLIC(cJSON *) cJSON_ParseWithLength(const char *value, size_t buffer_len
 
 #define cjson_min(a, b) (((a) < (b)) ? (a) : (b))
 
+/*
+ * 函数名：print
+ * 内部函数：核心生成函数
+ * 参数：
+ *   item - 根节点
+ *   format - 是否格式化输出
+ *   hooks - 内存钩子
+ * 返回值：成功返回 JSON 字符串，失败返回 NULL
+ * 核心逻辑：
+ *   1. 初始化打印缓冲区（默认 256 字节）
+ *   2. 调用 print_value 生成 JSON 字符串
+ *   3. 调整缓冲区大小（裁剪到实际长度）
+ *   4. 失败则释放缓冲区
+ * 内存规则：返回的字符串需调用 cJSON_free 释放
+ */
 static unsigned char *print(const cJSON * const item, cJSON_bool format, const internal_hooks * const hooks)
 {
     static const size_t default_buffer_size = 256;
@@ -1321,11 +1537,11 @@ fail:
 /* Render a cJSON item/entity/structure to text. */
 /*
  * 函数名：cJSON_Print
- * 作用：格式化生成 JSON 字符串（对外暴露的常用接口）
- * 参数：item - 待生成的 cJSON 节点
+ * 对外接口：格式化生成 JSON 字符串
+ * 参数：item - 根节点
  * 返回值：成功返回 JSON 字符串，失败返回 NULL
+ * 核心逻辑：封装 print 函数，指定 format=true
  * 内存规则：返回的字符串必须调用 cJSON_free 释放
- * 封装逻辑：调用 print 函数，指定 fmt=1（格式化输出）
  */
 CJSON_PUBLIC(char *) cJSON_Print(const cJSON *item)
 {
@@ -1388,6 +1604,25 @@ CJSON_PUBLIC(cJSON_bool) cJSON_PrintPreallocated(cJSON *item, char *buffer, cons
 }
 
 /* Parser core - when encountering text, process appropriately. */
+/*
+ * 函数名：parse_value
+ * 内部函数：解析核心分发函数
+ * 参数：
+ *   item - 输出节点
+ *   input_buffer - 解析缓冲区
+ * 返回值：成功返回 true，失败返回 false
+ * 核心逻辑：
+ *   1. 根据首字符判断 JSON 类型：
+ *      - null → cJSON_NULL
+ *      - false → cJSON_False
+ *      - true → cJSON_True
+ *      - " → parse_string
+ *      - -/0-9 → parse_number
+ *      - [ → parse_array
+ *      - { → parse_object
+ *   2. 匹配成功则设置节点类型，更新偏移量
+ *   3. 无匹配则返回 false（解析失败）
+ */
 static cJSON_bool parse_value(cJSON * const item, parse_buffer * const input_buffer)
 {
     if ((input_buffer == NULL) || (input_buffer->content == NULL))
@@ -1443,6 +1678,28 @@ static cJSON_bool parse_value(cJSON * const item, parse_buffer * const input_buf
 }
 
 /* Render a value to text. */
+/*
+ * 函数名：print_value
+ * 内部函数：生成核心分发函数（按节点类型输出）
+ * 参数：
+ *   item - 待输出的节点
+ *   output_buffer - 打印缓冲区
+ * 返回值：成功返回 true，失败返回 false
+ * 核心逻辑：
+ *   1. 根据节点类型分发到对应打印函数：
+ *      - cJSON_NULL → 输出 "null"
+ *      - cJSON_False → 输出 "false"
+ *      - cJSON_True → 输出 "true"
+ *      - cJSON_Number → 调用 print_number
+ *      - cJSON_String → 调用 print_string
+ *      - cJSON_Array → 调用 print_array
+ *      - cJSON_Object → 调用 print_object
+ *   2. 格式化输出时处理缩进/换行（depth 控制缩进层级）
+ *   3. 空节点 → 输出 "null"（兼容处理）
+ * 错误处理：
+ *   - 未知节点类型 → 返回 false
+ *   - 对应打印函数失败 → 返回 false
+ */
 static cJSON_bool print_value(const cJSON * const item, printbuffer * const output_buffer)
 {
     unsigned char *output = NULL;
@@ -1452,7 +1709,7 @@ static cJSON_bool print_value(const cJSON * const item, printbuffer * const outp
         return false;
     }
 
-    switch ((item->type) & 0xFF)
+    switch ((item->type) & 0xFF)/* 屏蔽高位标志位（如 cJSON_IsReference） */
     {
         case cJSON_NULL:
             output = ensure(output_buffer, 5);
@@ -1517,6 +1774,29 @@ static cJSON_bool print_value(const cJSON * const item, printbuffer * const outp
 }
 
 /* Build an array from input text. */
+/*
+ * 函数名：parse_array
+ * 内部函数：递归解析 JSON 数组
+ * 参数：
+ *   item - 输出数组节点
+ *   input_buffer - 解析缓冲区
+ * 返回值：成功返回 true，失败返回 false
+ * 核心逻辑：
+ *   1. 跳过开头 '['，初始化子节点链表
+ *   2. 循环解析数组元素（value 类型）：
+ *      - 跳过空白字符
+ *      - 检测数组结束 ']' → 终止循环
+ *      - 调用 parse_value 解析单个元素
+ *      - 处理分隔符 ','（最后一个元素后无逗号）
+ *   3. 递归解析嵌套数组（通过 parse_value 分发）
+ *   4. 设置节点类型为 cJSON_Array，绑定子节点链表
+ * 嵌套限制：
+ *   - depth 超过 1000 → 返回 false（防止栈溢出）
+ * 错误处理：
+ *   - 数组未结束 → 返回 false
+ *   - 元素解析失败 → 返回 false
+ *   - 内存分配失败 → 返回 false
+ */
 static cJSON_bool parse_array(cJSON * const item, parse_buffer * const input_buffer)
 {
     cJSON *head = NULL; /* head of the linked list */
@@ -1528,6 +1808,7 @@ static cJSON_bool parse_array(cJSON * const item, parse_buffer * const input_buf
     }
     input_buffer->depth++;
 
+    /* 输出数组开头 '[' */
     if (buffer_at_offset(input_buffer)[0] != '[')
     {
         /* not an array */
@@ -1586,6 +1867,7 @@ static cJSON_bool parse_array(cJSON * const item, parse_buffer * const input_buf
     }
     while (can_access_at_index(input_buffer, 0) && (buffer_at_offset(input_buffer)[0] == ','));
 
+    /* 输出数组结束 ']' */
     if (cannot_access_at_index(input_buffer, 0) || buffer_at_offset(input_buffer)[0] != ']')
     {
         goto fail; /* expected end of array */
@@ -1682,6 +1964,32 @@ static cJSON_bool print_array(const cJSON * const item, printbuffer * const outp
 }
 
 /* Build an object from the text. */
+/*
+ * 函数名：parse_object
+ * 内部函数：递归解析 JSON 对象
+ * 参数：
+ *   item - 输出对象节点
+ *   input_buffer - 解析缓冲区
+ * 返回值：成功返回 true，失败返回 false
+ * 核心逻辑：
+ *   1. 跳过开头 '{'，初始化键值对链表
+ *   2. 循环解析对象键值对：
+ *      - 跳过空白字符
+ *      - 检测对象结束 '}' → 终止循环
+ *      - 解析 key（必须是字符串类型）
+ *      - 跳过空白字符，检测分隔符 ':'
+ *      - 解析 value（任意 JSON 类型）
+ *      - 处理分隔符 ','（最后一个键值对后无逗号）
+ *   3. 递归解析嵌套对象（通过 parse_value 分发）
+ *   4. 设置节点类型为 cJSON_Object，绑定子节点链表
+ * 嵌套限制：
+ *   - depth 超过 1000 → 返回 false（防止栈溢出）
+ * 错误处理：
+ *   - 对象未结束 → 返回 false
+ *   - key 非字符串/无分隔符 ':' → 返回 false
+ *   - value 解析失败 → 返回 false
+ *   - 内存分配失败 → 返回 false
+ */
 static cJSON_bool parse_object(cJSON * const item, parse_buffer * const input_buffer)
 {
     cJSON *head = NULL; /* linked list head */
@@ -1800,6 +2108,28 @@ fail:
 }
 
 /* Render an object to text. */
+/*
+ * 函数名：print_value
+ * 内部函数：生成核心分发函数（按节点类型输出）
+ * 参数：
+ *   item - 待输出的节点
+ *   output_buffer - 打印缓冲区
+ * 返回值：成功返回 true，失败返回 false
+ * 核心逻辑：
+ *   1. 根据节点类型分发到对应打印函数：
+ *      - cJSON_NULL → 输出 "null"
+ *      - cJSON_False → 输出 "false"
+ *      - cJSON_True → 输出 "true"
+ *      - cJSON_Number → 调用 print_number
+ *      - cJSON_String → 调用 print_string
+ *      - cJSON_Array → 调用 print_array
+ *      - cJSON_Object → 调用 print_object
+ *   2. 格式化输出时处理缩进/换行（depth 控制缩进层级）
+ *   3. 空节点 → 输出 "null"（兼容处理）
+ * 错误处理：
+ *   - 未知节点类型 → 返回 false
+ *   - 对应打印函数失败 → 返回 false
+ */
 static cJSON_bool print_object(const cJSON * const item, printbuffer * const output_buffer)
 {
     unsigned char *output_pointer = NULL;
