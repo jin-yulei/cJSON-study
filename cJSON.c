@@ -1377,7 +1377,7 @@ CJSON_PUBLIC(cJSON *) cJSON_ParseWithOpts(const char *value, const char **return
     }
 
     /* Adding null character size due to require_null_terminated. */
-    * 
+    /* 
      * 计算缓冲区长度：
      * 1. strlen(value)：获取字符串有效长度（不含 '\0'）
      * 2. + sizeof("")：等价于 +1，为 '\0' 终止符预留空间（满足 require_null_terminated 的校验要求）
