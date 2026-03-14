@@ -1295,11 +1295,28 @@ static cJSON_bool print_string_ptr(const unsigned char * const input, printbuffe
  *   p - 打印缓冲区
  * 返回值：print_string_ptr 的返回值
  */
-static cJSON_bool print_string(const cJSON * const item, printbuffer * const p)
+static int print_string(const char * const input, printbuffer * const output_buffer)
 {
-    return print_string_ptr((unsigned char*)item->valuestring, p);
-}
+    unsigned char *out = output_buffer->buffer + output_buffer->offset;
+    size_t i = 0;
 
+    // 写入左引号
+    out[i++] = '"';
+    output_buffer->offset++;
+
+    // 遍历并写入每个字符（核心修复：确保写入）
+    const char *ptr = input;
+    while (*ptr) {
+        out[i++] = *ptr++;
+        output_buffer->offset++;
+    }
+
+    // 写入右引号
+    out[i++] = '"';
+    output_buffer->offset++;
+
+    return 1;
+}
 /* Predeclare these prototypes. */
 static cJSON_bool parse_value(cJSON * const item, parse_buffer * const input_buffer);
 static cJSON_bool print_value(const cJSON * const item, printbuffer * const output_buffer);
