@@ -24,13 +24,7 @@
 /* JSON parser in C. */
 
 /* disable warnings about old C89 functions in MSVC */
-// 获取默认美化配置：返回预设的通用配置
-const cJSON_PrettyConfig cJSON_GetDefaultPrettyConfig(void)
-{
-    // 初始化：1=用制表符、4个空格缩进、冒号后加空格、空对象紧凑
-    cJSON_PrettyConfig config = {1, 4, 1, 1};
-    return config;
-}
+
 #if !defined(_CRT_SECURE_NO_DEPRECATE) && defined(_MSC_VER)
 #define _CRT_SECURE_NO_DEPRECATE
 #endif
@@ -2041,7 +2035,7 @@ static int print_array(const cJSON * const item, printbuffer * const output_buff
     if (config->compact_empty && !current_element)
     {
         // 分配内存："[]"+'\0' 共3字节
-        output_pointer = (unsigned char*)output_buffer->hooks.malloc_fn(3);
+        output_pointer = (unsigned char*)cJSON_malloc(3);
         if (!output_pointer) return 0;
         strcpy((char*)output_pointer, "[]");
         output_buffer->buffer = output_pointer;
@@ -2051,7 +2045,7 @@ static int print_array(const cJSON * const item, printbuffer * const output_buff
     }
 
     // 非空数组：先写入 [
-    output_pointer = (unsigned char*)output_buffer->hooks.malloc_fn(1);
+    output_pointer = (unsigned char*)cJSON_malloc(1);
     if (!output_pointer) return 0;
 
     *output_pointer = '[';
@@ -2069,7 +2063,7 @@ static int print_array(const cJSON * const item, printbuffer * const output_buff
         {
             // format=1: ", " 占2字节，否则 "," 占1字节
             length = output_buffer->format ? 2 : 1;
-            output_pointer = (unsigned char*)output_buffer->hooks.malloc_fn(length + 1);
+            output_pointer = (unsigned char*)cJSON_malloc(length + 1);
             if (!output_pointer) return 0;
             
             *output_pointer++ = ',';
@@ -2081,7 +2075,7 @@ static int print_array(const cJSON * const item, printbuffer * const output_buff
     }
 
     // 写入右中括号，恢复嵌套深度
-    output_pointer = (unsigned char*)output_buffer->hooks.malloc_fn(2);
+    output_pointer = (unsigned char*)cJSON_malloc(2);
     if (!output_pointer) return 0;
     *output_pointer++ = ']';
     *output_pointer = '\0';
@@ -2296,7 +2290,7 @@ static int print_object(const cJSON * const item, printbuffer * const output_buf
     if (config->compact_empty && !current_item)
     {
         // 分配内存："{}"+'\0' 共3字节，使用配置的内存分配函数
-        output_pointer = (unsigned char*)output_buffer->hooks.malloc_fn(3);
+        output_pointer = (unsigned char*)cJSON_malloc(3);
         if (!output_pointer) return 0;
         strcpy((char*)output_pointer, "{}");
         output_buffer->buffer = output_pointer;
@@ -2307,7 +2301,7 @@ static int print_object(const cJSON * const item, printbuffer * const output_buf
 
     // 非空对象：先写入 { + 换行（格式化模式下）
     length = output_buffer->format ? 2 : 1; // format=1: "{\\n}" 占2字节，否则 "{" 占1字节
-    output_pointer = (unsigned char*)output_buffer->hooks.malloc_fn(length + 1);
+    output_pointer = (unsigned char*)cJSON_malloc(length + 1);
     if (!output_pointer) return 0;
 
     *output_pointer++ = '{';          // 写入左大括号
@@ -2323,7 +2317,7 @@ static int print_object(const cJSON * const item, printbuffer * const output_buf
         {
             // 计算缩进长度：制表符=深度值，空格=深度×单级空格数
             size_t i, indent_len = config->use_tab ? output_buffer->depth : output_buffer->depth * config->indent_space_count;
-            output_pointer = (unsigned char*)output_buffer->hooks.malloc_fn(indent_len);
+            output_pointer = (unsigned char*)cJSON_malloc(indent_len);
             if (!output_pointer) return 0;
             
             // 写入缩进字符
@@ -2337,7 +2331,7 @@ static int print_object(const cJSON * const item, printbuffer * const output_buf
         
         // 打印冒号 + 可选空格（美化配置控制）
         length = output_buffer->format ? (config->space_after_colon ? 2 : 1) : 1;
-        output_pointer = (unsigned char*)output_buffer->hooks.malloc_fn(length);
+        output_pointer = (unsigned char*)cJSON_malloc(length);
         if (!output_pointer) return 0;
         
         *output_pointer++ = ':'; // 写入冒号
@@ -2351,7 +2345,7 @@ static int print_object(const cJSON * const item, printbuffer * const output_buf
         
         // 非最后一个元素：加逗号 + 换行（格式化模式）
         length = (output_buffer->format ? 1 : 0) + (current_item->next ? 1 : 0);
-        output_pointer = (unsigned char*)output_buffer->hooks.malloc_fn(length + 1);
+        output_pointer = (unsigned char*)cJSON_malloc(length + 1);
         if (!output_pointer) return 0;
         
         if (current_item->next) *output_pointer++ = ','; // 非最后一个元素加逗号
@@ -2367,7 +2361,7 @@ static int print_object(const cJSON * const item, printbuffer * const output_buf
     {
         // 计算结尾缩进：深度-1（回到对象所在层级）
         size_t i, indent_len = (output_buffer->depth - 1) * (config->use_tab ? 1 : config->indent_space_count);
-        output_pointer = (unsigned char*)output_buffer->hooks.malloc_fn(indent_len + 2);
+        output_pointer = (unsigned char*)cJSON_malloc(indent_len + 2);
         if (!output_pointer) return 0;
         
         // 写入结尾缩进
@@ -2380,7 +2374,7 @@ static int print_object(const cJSON * const item, printbuffer * const output_buf
     else
     {
         // 非格式化模式：直接写入右大括号
-        output_pointer = (unsigned char*)output_buffer->hooks.malloc_fn(2);
+        output_pointer = (unsigned char*)cJSON_malloc(2);
         if (!output_pointer) return 0;
         *output_pointer++ = '}';
         *output_pointer = '\0';
