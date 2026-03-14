@@ -3693,58 +3693,52 @@ CJSON_PUBLIC(void) cJSON_free(void *object)
     global_hooks.deallocate(object);
     object = NULL;
 }
-// 内部辅助函数：实现美化打印的核心逻辑（适配你的 printbuffer 结构体）
-static unsigned char *print_pretty(const cJSON * const item, const cJSON_PrettyConfig *config, internal_hooks *hooks)
+// 内部辅助函数：实现美化打印的核心逻辑
+static unsigned char *print_pretty(const cJSON * const item, const cJSON_PrettyConfig *config)
 {
-    printbuffer buffer = {0}; // 初始化打印缓冲区
+    printbuffer buffer = {0};
     unsigned char *printed = NULL;
 
-    // 初始化缓冲区基础配置（默认1024字节，避免频繁扩容）
-    buffer.buffer = (unsigned char*)hooks->malloc_fn(1024);
+    // 初始化缓冲区：直接用 cJSON_malloc 分配内存
+    buffer.buffer = (unsigned char*)cJSON_malloc(1024);
     if (!buffer.buffer) return NULL;
     
     buffer.length = 1024;
-    buffer.format = 1;                // 强制开启格式化模式
-    buffer.depth = 0;                 // 初始嵌套深度为0
-    buffer.noalloc = 0;               // 允许内存分配
-    buffer.hooks = *hooks;            // 复用传入的内存管理函数
-    // 美化配置：优先用传入的配置，无则用默认
+    buffer.format = 1;                // 强制格式化
+    buffer.depth = 0;
+    buffer.noalloc = 0;
+    // 美化配置：优先用传入的，否则用默认
     buffer.pretty_config = config ? *config : cJSON_GetDefaultPrettyConfig();
 
-    // 打印JSON到缓冲区（核心逻辑）
+    // 打印 JSON 到缓冲区
     if (!print_value(item, &buffer))
     {
-        hooks->free_fn(buffer.buffer); // 打印失败释放缓冲区
+        cJSON_free(buffer.buffer);    // 失败时释放临时缓冲区
         return NULL;
     }
 
-    // 调整缓冲区大小：适配实际内容长度（避免内存浪费）
-    printed = (unsigned char*)hooks->malloc_fn(buffer.offset + 1);
+    // 分配最终结果的内存
+    printed = (unsigned char*)cJSON_malloc(buffer.offset + 1);
     if (!printed)
     {
-        hooks->free_fn(buffer.buffer);
+        cJSON_free(buffer.buffer);
         return NULL;
     }
-    // 复制缓冲区内容到最终字符串
     memcpy(printed, buffer.buffer, buffer.offset);
-    printed[buffer.offset] = '\0'; // 字符串终止符
-    hooks->free_fn(buffer.buffer); // 释放临时缓冲区
+    printed[buffer.offset] = '\0';    // 字符串结束符
+    cJSON_free(buffer.buffer);       // 释放临时缓冲区
 
     return printed;
 }
 
-// 对外暴露API：自定义配置的美化打印（适配你的代码版本）
+// 对外 API：自定义配置美化打印
 char *cJSON_PrintPretty(const cJSON *item, const cJSON_PrettyConfig *config)
 {
-    internal_hooks hooks;
-    // 获取当前内存管理钩子（兼容 cJSON_InitHooks 设置的自定义内存函数）
-    cJSON_GetInternalHooks(&hooks);
-    return (char*)print_pretty(item, config, &hooks);
+    return (char*)print_pretty(item, config);
 }
 
-// 对外暴露API：默认配置的美化打印（简化调用）
+// 对外 API：默认配置美化打印
 char *cJSON_PrintPrettyDefault(const cJSON *item)
 {
-    // 传入NULL表示使用默认配置
     return cJSON_PrintPretty(item, NULL);
 }
