@@ -610,6 +610,13 @@ typedef struct
     cJSON_PrettyConfig pretty_config; // 新增：美化配置字段
 } printbuffer;
 
+// 获取默认美化配置
+const cJSON_PrettyConfig cJSON_GetDefaultPrettyConfig(void)
+{
+    cJSON_PrettyConfig config = {1, 4, 1, 1};
+    return config;
+}
+
 /* realloc printbuffer if necessary to have at least "needed" bytes more */
 /*
  * 函数名：ensure
