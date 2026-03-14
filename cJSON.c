@@ -3724,6 +3724,8 @@ static unsigned char *print_pretty(const cJSON * const item, const cJSON_PrettyC
         return NULL;
     }
 
+    printf("DEBUG: buffer.offset = %zu\n", buffer.offset); // 打印缓冲区写入长度
+  
     // 分配最终结果的内存
     printed = (unsigned char*)cJSON_malloc(buffer.offset + 1);
     if (!printed)
