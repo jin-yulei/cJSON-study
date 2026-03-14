@@ -365,6 +365,21 @@ CJSON_PUBLIC(char*) cJSON_SetValuestring(cJSON *object, const char *valuestring)
 
 /* Macro for iterating over an array or object用于遍历数组或对象的宏 */
 #define cJSON_ArrayForEach(element, array) for(element = (array != NULL) ? (array)->child : NULL; element != NULL; element = element->next)
+// 格式化美化配置结构体：控制缩进、空格、紧凑显示等规则
+typedef struct cJSON_PrettyConfig
+{
+    int use_tab;               // 是否用制表符缩进（1=是，0=用空格）
+    int indent_space_count;    // 空格缩进时，单个级别空格数（默认4）
+    int space_after_colon;     // 键值对冒号后是否加空格（1=加，0=不加）
+    int compact_empty;         // 空对象/数组是否紧凑显示（1=紧凑{}，0=展开）
+} cJSON_PrettyConfig;
+
+// 获取默认美化配置（制表符缩进、冒号后加空格、空对象紧凑）
+const cJSON_PrettyConfig cJSON_GetDefaultPrettyConfig(void);
+// 自定义配置的美化打印函数
+char *cJSON_PrintPretty(const cJSON *item, const cJSON_PrettyConfig *config);
+// 简化版：使用默认配置的美化打印
+char *cJSON_PrintPrettyDefault(const cJSON *item);
 
 /* malloc/free objects using the malloc/free functions that have been set with cJSON_InitHooks 使用通过 cJSON_InitHooks 设置的 malloc/free 函数分配/释放内存*/
 CJSON_PUBLIC(void *) cJSON_malloc(size_t size);
