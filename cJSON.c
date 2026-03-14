@@ -2025,8 +2025,7 @@ fail:
  *   - 非空格式化 → "[元素1, 元素2, 元素3]"
  *   - 非空紧凑 → "[元素1,元素2,元素3]"
  */
-// 打印JSON数组（适配美化配置，兼容原有功能）
-// 打印JSON数组（自定义美化逻辑）
+// 打印JSON数组（自定义美化逻辑，同步修复遍历问题）
 static int print_array(const cJSON * const item, printbuffer * const output_buffer)
 {
     unsigned char *out = output_buffer->buffer + output_buffer->offset;
@@ -2035,26 +2034,30 @@ static int print_array(const cJSON * const item, printbuffer * const output_buff
     cJSON_PrettyConfig *config = &output_buffer->pretty_config;
     size_t indent_len = config->use_tab ? output_buffer->depth : output_buffer->depth * config->indent_space_count;
 
-    // 写入左中括号
+    // 1. 写入左中括号
     out[i++] = '[';
     output_buffer->offset++;
 
-    // 格式化模式下换行+缩进
+    // 2. 格式化换行+缩进
     if (output_buffer->format && child) {
         out[i++] = '\n';
         output_buffer->offset++;
-        // 写入缩进
+        // 子元素缩进
         for (size_t j=0; j<indent_len+config->indent_space_count; j++) {
             out[i++] = config->use_tab ? '\t' : ' ';
             output_buffer->offset++;
         }
     }
 
-    // 遍历子元素
+    // 3. 遍历数组元素（修复遍历中断）
     while (child) {
         // 打印值
-        print_value(child, output_buffer);
+        if (!print_value(child, output_buffer)) {
+            return 0;
+        }
+        // 同步指针
         out = output_buffer->buffer + output_buffer->offset;
+        i = 0;
 
         // 下一个元素
         child = child->next;
@@ -2064,7 +2067,7 @@ static int print_array(const cJSON * const item, printbuffer * const output_buff
             if (output_buffer->format) {
                 out[i++] = '\n';
                 output_buffer->offset++;
-                // 写入缩进
+                // 子元素缩进
                 for (size_t j=0; j<indent_len+config->indent_space_count; j++) {
                     out[i++] = config->use_tab ? '\t' : ' ';
                     output_buffer->offset++;
@@ -2073,22 +2076,22 @@ static int print_array(const cJSON * const item, printbuffer * const output_buff
         }
     }
 
-    // 格式化模式下换行+缩进
+    // 4. 闭合中括号前的换行+缩进
     if (output_buffer->format && item->child) {
         out[i++] = '\n';
         output_buffer->offset++;
-        // 写入缩进
+        // 当前层级缩进
         for (size_t j=0; j<indent_len; j++) {
             out[i++] = config->use_tab ? '\t' : ' ';
             output_buffer->offset++;
         }
     }
 
-    // 写入右中括号
+    // 5. 写入右中括号
     out[i++] = ']';
     output_buffer->offset++;
 
-    // 空数组紧凑显示（自定义配置）
+    // 6. 空数组紧凑显示
     if (config->compact_empty && !item->child) {
         output_buffer->offset = 2; // 只保留 "[]"
         out[0] = '[';
@@ -2264,34 +2267,35 @@ fail:
 }
 
 /* Render an object to text. */
-// 打印JSON对象（适配美化配置，兼容原有功能）
-// 打印JSON对象（自定义美化逻辑）
+// 打印JSON对象（自定义美化逻辑，修复遍历子元素中断问题）
 static int print_object(const cJSON * const item, printbuffer * const output_buffer)
 {
+    // 初始化输出指针，指向当前缓冲区末尾
     unsigned char *out = output_buffer->buffer + output_buffer->offset;
     size_t i = 0;
     cJSON *child = item->child;
     cJSON_PrettyConfig *config = &output_buffer->pretty_config;
+    // 计算当前层级的缩进长度
     size_t indent_len = config->use_tab ? output_buffer->depth : output_buffer->depth * config->indent_space_count;
 
-    // 写入左大括号
+    // 1. 写入左大括号
     out[i++] = '{';
     output_buffer->offset++;
 
-    // 格式化模式下换行+缩进
+    // 2. 如果有子元素，格式化换行+缩进
     if (output_buffer->format && child) {
         out[i++] = '\n';
         output_buffer->offset++;
-        // 写入缩进
+        // 写入子元素的缩进（当前层级+1）
         for (size_t j=0; j<indent_len+config->indent_space_count; j++) {
             out[i++] = config->use_tab ? '\t' : ' ';
             output_buffer->offset++;
         }
     }
 
-    // 遍历子元素
+    // 3. 遍历所有子元素（修复只遍历第一个的问题）
     while (child) {
-        // 打印键名
+        // 3.1 打印键名（带双引号）
         out[i++] = '"';
         output_buffer->offset++;
         const char *key = child->string;
@@ -2302,7 +2306,7 @@ static int print_object(const cJSON * const item, printbuffer * const output_buf
         out[i++] = '"';
         output_buffer->offset++;
 
-        // 冒号 + 可选空格（自定义配置）
+        // 3.2 冒号 + 可选空格（自定义配置）
         out[i++] = ':';
         output_buffer->offset++;
         if (config->space_after_colon) {
@@ -2310,19 +2314,25 @@ static int print_object(const cJSON * const item, printbuffer * const output_buf
             output_buffer->offset++;
         }
 
-        // 打印值
-        print_value(child, output_buffer);
+        // 3.3 打印值（核心修复：同步指针）
+        if (!print_value(child, output_buffer)) {
+            return 0; // 打印失败直接返回
+        }
+        // 同步 out 指针到最新的缓冲区位置
         out = output_buffer->buffer + output_buffer->offset;
+        i = 0; // 重置i，从新位置开始写入
 
-        // 下一个元素
+        // 3.4 处理下一个元素
         child = child->next;
         if (child) {
+            // 写逗号分隔符
             out[i++] = ',';
             output_buffer->offset++;
+            // 格式化换行+缩进
             if (output_buffer->format) {
                 out[i++] = '\n';
                 output_buffer->offset++;
-                // 写入缩进
+                // 写入子元素缩进
                 for (size_t j=0; j<indent_len+config->indent_space_count; j++) {
                     out[i++] = config->use_tab ? '\t' : ' ';
                     output_buffer->offset++;
@@ -2331,22 +2341,22 @@ static int print_object(const cJSON * const item, printbuffer * const output_buf
         }
     }
 
-    // 格式化模式下换行+缩进
+    // 4. 闭合大括号前的换行+缩进
     if (output_buffer->format && item->child) {
         out[i++] = '\n';
         output_buffer->offset++;
-        // 写入缩进
+        // 写入当前层级的缩进
         for (size_t j=0; j<indent_len; j++) {
             out[i++] = config->use_tab ? '\t' : ' ';
             output_buffer->offset++;
         }
     }
 
-    // 写入右大括号
+    // 5. 写入右大括号
     out[i++] = '}';
     output_buffer->offset++;
 
-    // 空对象紧凑显示（自定义配置）
+    // 6. 空对象紧凑显示（自定义配置）
     if (config->compact_empty && !item->child) {
         output_buffer->offset = 2; // 只保留 "{}"
         out[0] = '{';
