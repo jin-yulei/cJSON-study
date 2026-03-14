@@ -607,7 +607,7 @@ typedef struct
     cJSON_bool noalloc;
     cJSON_bool format; /* is this print a formatted print */
     internal_hooks hooks;
-    cJSON_PrettyConfig pretty_config; // 新增：美化配置字段
+    cJSON_PrettyConfig pretty_config; /* 新增：美化配置 */
 } printbuffer;
 
 // 获取默认美化配置
@@ -1317,6 +1317,16 @@ static int print_string(const char * const input, printbuffer * const output_buf
 
     return 1;
 }
+/* 获取默认美化配置 */
+const cJSON_PrettyConfig cJSON_GetDefaultPrettyConfig(void)
+{
+    cJSON_PrettyConfig config;
+    config.use_tab = 1;              /* 默认使用制表符 */
+    config.indent_space_count = 4;   /* 空格缩进时4个空格 */
+    config.space_after_colon = 1;    /* 冒号后默认加空格 */
+    config.compact_empty = 1;        /* 空对象/数组紧凑显示 */
+    return config;
+}
 /* Predeclare these prototypes. */
 static cJSON_bool parse_value(cJSON * const item, parse_buffer * const input_buffer);
 static cJSON_bool print_value(const cJSON * const item, printbuffer * const output_buffer);
@@ -1542,6 +1552,12 @@ static unsigned char *print(const cJSON * const item, cJSON_bool format, const i
 
     // 初始化打印缓冲区：清空所有字段（避免脏数据）
     memset(buffer, 0, sizeof(buffer));
+
+     /* 新增：初始化美化配置（原生 API 使用空格4缩进，冒号后无空格，紧凑空对象） */
+    buffer->pretty_config.use_tab = 0;
+    buffer->pretty_config.indent_space_count = 4;
+    buffer->pretty_config.space_after_colon = 0;
+    buffer->pretty_config.compact_empty = 1;
 
     /* create buffer */
     /* 第一步：创建初始打印缓冲区 */
@@ -2043,79 +2059,92 @@ fail:
  *   - 非空紧凑 → "[元素1,元素2,元素3]"
  */
 // 打印JSON数组（自定义美化逻辑，同步修复遍历问题）
+/* Render an array to text */
+/* Render an array to text */
 static int print_array(const cJSON * const item, printbuffer * const output_buffer)
 {
     unsigned char *out = output_buffer->buffer + output_buffer->offset;
     size_t i = 0;
     cJSON *child = item->child;
     cJSON_PrettyConfig *config = &output_buffer->pretty_config;
-    size_t indent_len = config->use_tab ? output_buffer->depth : output_buffer->depth * config->indent_space_count;
+    size_t indent_len = (config->use_tab != 0) 
+        ? output_buffer->depth 
+        : output_buffer->depth * (size_t)config->indent_space_count;
 
-    // 1. 写入左中括号
+    /* 1. 写入左中括号 */
     out[i++] = '[';
     output_buffer->offset++;
 
-    // 2. 格式化换行+缩进
-    if (output_buffer->format && child) {
+    /* 2. 格式化换行+缩进（非空数组） */
+    if (output_buffer->format && child != NULL) {
         out[i++] = '\n';
         output_buffer->offset++;
-        // 子元素缩进
-        for (size_t j=0; j<indent_len+config->indent_space_count; j++) {
-            out[i++] = config->use_tab ? '\t' : ' ';
+        /* 子元素缩进（depth + 1） */
+        size_t child_indent = (config->use_tab != 0)
+            ? indent_len + 1
+            : indent_len + (size_t)config->indent_space_count;
+        for (size_t j = 0; j < child_indent; j++) {
+            out[i++] = (config->use_tab != 0) ? '\t' : ' ';
             output_buffer->offset++;
         }
     }
 
-    // 3. 遍历数组元素（修复遍历中断）
-    while (child) {
-        // 打印值
+    /* 3. 遍历数组元素 */
+    while (child != NULL) {
+        /* 打印值 */
         if (!print_value(child, output_buffer)) {
-            return 0;
+            return 0;  /* int 返回 0 表示失败 */
         }
-        // 同步指针
+        /* 关键：同步指针到最新缓冲区位置 */
         out = output_buffer->buffer + output_buffer->offset;
         i = 0;
 
-        // 下一个元素
+        /* 下一个元素 */
         child = child->next;
-        if (child) {
+        if (child != NULL) {
             out[i++] = ',';
             output_buffer->offset++;
             if (output_buffer->format) {
                 out[i++] = '\n';
                 output_buffer->offset++;
-                // 子元素缩进
-                for (size_t j=0; j<indent_len+config->indent_space_count; j++) {
-                    out[i++] = config->use_tab ? '\t' : ' ';
+                /* 下一个元素的缩进 */
+                size_t child_indent = (config->use_tab != 0)
+                    ? indent_len + 1
+                    : indent_len + (size_t)config->indent_space_count;
+                for (size_t j = 0; j < child_indent; j++) {
+                    out[i++] = (config->use_tab != 0) ? '\t' : ' ';
                     output_buffer->offset++;
                 }
             }
         }
     }
 
-    // 4. 闭合中括号前的换行+缩进
-    if (output_buffer->format && item->child) {
+    /* 4. 闭合中括号前的换行+缩进 */
+    if (output_buffer->format && item->child != NULL) {
         out[i++] = '\n';
         output_buffer->offset++;
-        // 当前层级缩进
-        for (size_t j=0; j<indent_len; j++) {
-            out[i++] = config->use_tab ? '\t' : ' ';
+        for (size_t j = 0; j < indent_len; j++) {
+            out[i++] = (config->use_tab != 0) ? '\t' : ' ';
             output_buffer->offset++;
         }
     }
 
-    // 5. 写入右中括号
+    /* 5. 写入右中括号 */
     out[i++] = ']';
     output_buffer->offset++;
 
-    // 6. 空数组紧凑显示
-    if (config->compact_empty && !item->child) {
-        output_buffer->offset = 2; // 只保留 "[]"
+    /* 6. 空数组紧凑显示 */
+    if (config->compact_empty != 0 && item->child == NULL) {
+        /* 回退到 "[]" */
+        output_buffer->offset -= (i - 2);
+        out = output_buffer->buffer + output_buffer->offset;
         out[0] = '[';
         out[1] = ']';
+        out[2] = '\0';
+        output_buffer->offset += 2;
     }
 
-    return 1;
+    return 1;  /* int 返回 1 表示成功 */
 }
 /* Build an object from the text. */
 /*
@@ -2284,103 +2313,108 @@ fail:
 }
 
 /* Render an object to text. */
-// 打印JSON对象（自定义美化逻辑，修复遍历子元素中断问题）
 static int print_object(const cJSON * const item, printbuffer * const output_buffer)
 {
-    // 初始化输出指针，指向当前缓冲区末尾
     unsigned char *out = output_buffer->buffer + output_buffer->offset;
     size_t i = 0;
     cJSON *child = item->child;
     cJSON_PrettyConfig *config = &output_buffer->pretty_config;
-    // 计算当前层级的缩进长度
-    size_t indent_len = config->use_tab ? output_buffer->depth : output_buffer->depth * config->indent_space_count;
+    size_t indent_len = (config->use_tab != 0) 
+        ? output_buffer->depth 
+        : output_buffer->depth * (size_t)config->indent_space_count;
 
-    // 1. 写入左大括号
+    /* 1. 写入左大括号 */
     out[i++] = '{';
     output_buffer->offset++;
 
-    // 2. 如果有子元素，格式化换行+缩进
-    if (output_buffer->format && child) {
+    /* 2. 格式化换行+缩进（非空对象） */
+    if (output_buffer->format && child != NULL) {
         out[i++] = '\n';
         output_buffer->offset++;
-        // 写入子元素的缩进（当前层级+1）
-        for (size_t j=0; j<indent_len+config->indent_space_count; j++) {
-            out[i++] = config->use_tab ? '\t' : ' ';
+        /* 子元素缩进 */
+        size_t child_indent = (config->use_tab != 0)
+            ? indent_len + 1
+            : indent_len + (size_t)config->indent_space_count;
+        for (size_t j = 0; j < child_indent; j++) {
+            out[i++] = (config->use_tab != 0) ? '\t' : ' ';
             output_buffer->offset++;
         }
     }
 
-    // 3. 遍历所有子元素（修复只遍历第一个的问题）
-    while (child) {
-        // 3.1 打印键名（带双引号）
+    /* 3. 遍历所有键值对 */
+    while (child != NULL) {
+        /* 3.1 打印键名（带双引号） */
         out[i++] = '"';
         output_buffer->offset++;
         const char *key = child->string;
-        while (*key) {
+        while (*key != '\0') {
             out[i++] = *key++;
             output_buffer->offset++;
         }
         out[i++] = '"';
         output_buffer->offset++;
 
-        // 3.2 冒号 + 可选空格（自定义配置）
+        /* 3.2 冒号 + 可选空格 */
         out[i++] = ':';
         output_buffer->offset++;
-        if (config->space_after_colon) {
+        if (config->space_after_colon != 0) {
             out[i++] = ' ';
             output_buffer->offset++;
         }
 
-        // 3.3 打印值（核心修复：同步指针）
+        /* 3.3 打印值（关键：同步指针） */
         if (!print_value(child, output_buffer)) {
-            return 0; // 打印失败直接返回
+            return 0;  /* int 返回 0 表示失败 */
         }
-        // 同步 out 指针到最新的缓冲区位置
         out = output_buffer->buffer + output_buffer->offset;
-        i = 0; // 重置i，从新位置开始写入
+        i = 0;
 
-        // 3.4 处理下一个元素
+        /* 3.4 下一个键值对 */
         child = child->next;
-        if (child) {
-            // 写逗号分隔符
+        if (child != NULL) {
             out[i++] = ',';
             output_buffer->offset++;
-            // 格式化换行+缩进
             if (output_buffer->format) {
                 out[i++] = '\n';
                 output_buffer->offset++;
-                // 写入子元素缩进
-                for (size_t j=0; j<indent_len+config->indent_space_count; j++) {
-                    out[i++] = config->use_tab ? '\t' : ' ';
+                /* 下一个键值对的缩进 */
+                size_t child_indent = (config->use_tab != 0)
+                    ? indent_len + 1
+                    : indent_len + (size_t)config->indent_space_count;
+                for (size_t j = 0; j < child_indent; j++) {
+                    out[i++] = (config->use_tab != 0) ? '\t' : ' ';
                     output_buffer->offset++;
                 }
             }
         }
     }
 
-    // 4. 闭合大括号前的换行+缩进
-    if (output_buffer->format && item->child) {
+    /* 4. 闭合大括号前的换行+缩进 */
+    if (output_buffer->format && item->child != NULL) {
         out[i++] = '\n';
         output_buffer->offset++;
-        // 写入当前层级的缩进
-        for (size_t j=0; j<indent_len; j++) {
-            out[i++] = config->use_tab ? '\t' : ' ';
+        for (size_t j = 0; j < indent_len; j++) {
+            out[i++] = (config->use_tab != 0) ? '\t' : ' ';
             output_buffer->offset++;
         }
     }
 
-    // 5. 写入右大括号
+    /* 5. 写入右大括号 */
     out[i++] = '}';
     output_buffer->offset++;
 
-    // 6. 空对象紧凑显示（自定义配置）
-    if (config->compact_empty && !item->child) {
-        output_buffer->offset = 2; // 只保留 "{}"
+    /* 6. 空对象紧凑显示 */
+    if (config->compact_empty != 0 && item->child == NULL) {
+        /* 回退到 "{}" */
+        output_buffer->offset -= (i - 2);
+        out = output_buffer->buffer + output_buffer->offset;
         out[0] = '{';
         out[1] = '}';
+        out[2] = '\0';
+        output_buffer->offset += 2;
     }
 
-    return 1;
+    return 1;  /* int 返回 1 表示成功 */
 }
 /* Get Array size/item / object item. */
 CJSON_PUBLIC(int) cJSON_GetArraySize(const cJSON *array)
@@ -3691,51 +3725,62 @@ CJSON_PUBLIC(void) cJSON_free(void *object)
     global_hooks.deallocate(object);
     object = NULL;
 }
-// 内部辅助函数：实现美化打印的核心逻辑
+/* ==================== 美化打印扩展实现（新增）==================== */
+
+/* 内部核心：带自定义配置的美化打印 */
 static unsigned char *print_pretty(const cJSON * const item, const cJSON_PrettyConfig *config)
 {
     printbuffer buffer = {0};
     unsigned char *printed = NULL;
+    cJSON_PrettyConfig default_config;
 
-    // 分配足够大的缓冲区（避免扩容）
+    /* 分配初始缓冲区（4KB，避免频繁扩容） */
     buffer.buffer = (unsigned char*)cJSON_malloc(4096);
     if (!buffer.buffer) return NULL;
     
     buffer.length = 4096;
-    buffer.format = 1;                // 强制开启格式化
+    buffer.format = 1;                /* 强制开启格式化 */
     buffer.depth = 0;
     buffer.noalloc = 0;
-    // 自定义配置：默认用2空格缩进，冒号后不加空格
-    cJSON_PrettyConfig default_config = {0, 2, 0, 1};
-    buffer.pretty_config = config ? *config : default_config;
+    buffer.hooks = global_hooks;
+    
+    /* 使用传入配置或默认配置 */
+    if (config != NULL) {
+        buffer.pretty_config = *config;
+    } else {
+        default_config = cJSON_GetDefaultPrettyConfig();
+        buffer.pretty_config = default_config;
+    }
 
-    // 打印JSON到缓冲区
+    /* 打印JSON到缓冲区 */
     if (!print_value(item, &buffer)) {
         cJSON_free(buffer.buffer);
         return NULL;
     }
 
-    // 分配最终结果内存
+    /* 分配精确大小的结果内存 */
     printed = (unsigned char*)cJSON_malloc(buffer.offset + 1);
     if (!printed) {
         cJSON_free(buffer.buffer);
         return NULL;
     }
     memcpy(printed, buffer.buffer, buffer.offset);
-    printed[buffer.offset] = '\0'; // 字符串结束符
+    printed[buffer.offset] = '\0';
 
     cJSON_free(buffer.buffer);
     return printed;
 }
 
-// 对外API：自定义配置美化打印
-char *cJSON_PrintPretty(const cJSON *item, const cJSON_PrettyConfig *config)
+/* 对外API：自定义配置美化打印 */
+CJSON_PUBLIC(char *) cJSON_PrintPretty(const cJSON *item, const cJSON_PrettyConfig *config)
 {
     return (char*)print_pretty(item, config);
 }
 
-// 对外API：默认配置美化打印
-char *cJSON_PrintPrettyDefault(const cJSON *item)
+/* 对外API：默认配置美化打印 */
+CJSON_PUBLIC(char *) cJSON_PrintPrettyDefault(const cJSON *item)
 {
     return cJSON_PrintPretty(item, NULL);
 }
+
+/* ========================================================= */
