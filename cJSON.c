@@ -610,13 +610,6 @@ typedef struct
     cJSON_PrettyConfig pretty_config; /* 新增：美化配置 */
 } printbuffer;
 
-// 获取默认美化配置
-const cJSON_PrettyConfig cJSON_GetDefaultPrettyConfig(void)
-{
-    cJSON_PrettyConfig config = {1, 4, 1, 1};
-    return config;
-}
-
 /* realloc printbuffer if necessary to have at least "needed" bytes more */
 /*
  * 函数名：ensure
@@ -1887,7 +1880,7 @@ static cJSON_bool print_value(const cJSON * const item, printbuffer * const outp
 
          // 处理字符串类型：分发到 print_string 函数（处理转义字符、UTF-8 输出）
         case cJSON_String:
-            return print_string(item, output_buffer);
+            return print_string(item->valuestring, output_buffer);
 
          // 处理数组类型：分发到 print_array 函数（递归打印数组元素，支持格式化换行/缩进）
         case cJSON_Array:
